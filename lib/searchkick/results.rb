@@ -32,7 +32,22 @@ module Searchkick
 
           # sort
           hits.map do |hit|
-            results[hit["_type"]][hit["_id"].to_s]
+            result = results[hit["_type"]][hit["_id"].to_s]
+            if result
+              unless result.respond_to?(:search_hit)
+                result.define_singleton_method(:search_hit) do
+                  hit
+                end
+              end
+
+              if hit["highlight"] && !result.respond_to?(:search_highlights)
+                highlights = Hash[hit["highlight"].map { |k, v| [(options[:json] ? k : k.sub(/\.#{@options[:match_suffix]}\z/, "")).to_sym, v.first] }]
+                result.define_singleton_method(:search_highlights) do
+                  highlights
+                end
+              end
+            end
+            result
           end.compact
         else
           hits.map do |hit|
@@ -79,10 +94,6 @@ module Searchkick
         end
         [model, details]
       end
-    end
-
-    def facets
-      response["facets"]
     end
 
     def aggregations
@@ -181,7 +192,11 @@ module Searchkick
       if options[:includes]
         records =
           if defined?(NoBrainer::Document) && records < NoBrainer::Document
-            records.preload(options[:includes])
+            if Gem.loaded_specs["nobrainer"].version >= Gem::Version.new("0.21")
+              records.eager_load(options[:includes])
+            else
+              records.preload(options[:includes])
+            end
           else
             records.includes(options[:includes])
           end
@@ -196,7 +211,7 @@ module Searchkick
       elsif records.respond_to?(:queryable)
         # Mongoid 3+
         records.queryable.for_ids(ids)
-      elsif records.respond_to?(:unscoped) && records.all.respond_to?(:preload)
+      elsif records.respond_to?(:unscoped) && [:preload, :eager_load].any? { |m| records.all.respond_to?(m) }
         # Nobrainer
         records.unscoped.where(:id.in => ids)
       else
